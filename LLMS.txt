@@ -1,0 +1,532 @@
+SUPERAPP FRAMEWORK — LLM REFERENCE
+====================================
+
+SuperApp is a TypeScript web framework implementing The Elm Architecture (TEA).
+Zero runtime dependencies. Uses Bun as runtime and Vite as bundler.
+
+Package: "superapp" version 0.1.0
+Exports: "superapp", "superapp/fx", "superapp/subs", "superapp/router", "superapp/debugger", "superapp/jsx-runtime"
+
+================================================================================
+CORE TYPES (superapp)
+================================================================================
+
+VNode — Virtual DOM node
+  { tag: string | MemoView, props: Record<string, any>, key: string | number | undefined, children: VNode[], type: number, memo: unknown, node: Node | undefined }
+
+MemoView<P> = (props: P) => VNode
+Dispatch<Msg> = (msg: Msg | readonly Msg[]) => void
+EffectFn<Msg, P> = (dispatch: Dispatch<Msg>, props: P) => void
+Effect<Msg> = readonly [EffectFn<Msg, any>, any]
+Cmd<Msg> = readonly Effect<Msg>[]
+SubFn<Msg, P> = (dispatch: Dispatch<Msg>, props: P) => () => void
+Sub<Msg> = readonly [SubFn<Msg, any>, any] | false | null | undefined
+UpdateResult<S, Msg> = S | readonly [S, Cmd<Msg>]
+Update<S, Msg> = (state: Readonly<S>, msg: Msg) => UpdateResult<S, Msg>
+Init<S, Msg> = S | readonly [S, Cmd<Msg>]
+
+AppConfig<S, Msg>:
+  init: Init<S, Msg>
+  update: Update<S, Msg>
+  view: (state: Readonly<S>, dispatch: Dispatch<Msg>) => VNode
+  subscriptions?: (state: Readonly<S>) => Sub<Msg>[]
+  node: HTMLElement
+  debug?: boolean | DebugConfig
+  middleware?: (dispatch: Dispatch<Msg>) => Dispatch<Msg>
+
+DebugConfig:
+  console?: boolean
+  history?: boolean
+  maxHistory?: number
+
+AppInstance<S, Msg>:
+  dispatch: Dispatch<Msg>
+  getState: () => Readonly<S>
+  destroy: () => void
+  getHistory: () => readonly Readonly<S>[]
+  getHistoryIndex: () => number
+  goBack: () => void
+  goForward: () => void
+  jumpTo: (index: number) => void
+
+================================================================================
+CORE FUNCTIONS (superapp)
+================================================================================
+
+h(tag: string, props?: Record<string, any> | null, ...rawChildren: any[]): VNode
+  Create a virtual DOM element. Props support: class (string | array | object),
+  className, style (string | object), onXxx event handlers, ref, key.
+
+text(value: string | number | boolean): VNode
+  Create a text VNode.
+
+memo<P>(component: MemoView<P>, props: P): VNode
+  Memoized component. Skips re-render if props are shallowly equal.
+
+lazy<T>(view: (data: T) => VNode, data: T): VNode
+  Lazy evaluation. Same as memo but takes a view function and data.
+
+app<S, Msg>(config: AppConfig<S, Msg>): AppInstance<S, Msg>
+  Mount an application. Starts the TEA cycle.
+
+noFx<S>(state: S): readonly [S, Cmd<any>]
+  Return state with no effects. Equivalent to [state, []].
+
+withFx<S, Msg>(state: S, ...effects: Effect<Msg>[]): readonly [S, Cmd<Msg>]
+  Return state with effects. Equivalent to [state, effects].
+
+batch<Msg>(commands: readonly Cmd<Msg>[]): Cmd<Msg>
+  Merge multiple command arrays into one.
+
+none: Cmd<any>
+  Empty command array constant [].
+
+mapEffect<A, B>(effect: Effect<A>, fn: (a: A) => B): Effect<B>
+  Transform an effect's message type from A to B.
+
+mapSub<A, B>(sub: Sub<A>, fn: (a: A) => B): Sub<B>
+  Transform a subscription's message type from A to B. Passes through falsy subs.
+
+mapDispatch<A, B>(dispatch: Dispatch<B>, fn: (a: A) => B): Dispatch<A>
+  Create a child dispatch that maps messages from A to B.
+
+batchSubs<Msg>(...args: (Sub<Msg> | Sub<Msg>[])[]): Sub<Msg>[]
+  Merge subscriptions from multiple sources. Filters out falsy values.
+
+resolveClass(value: unknown): string
+  Resolve class values. Accepts string, array (falsy filtered), or object (truthy keys).
+
+================================================================================
+EFFECTS (superapp/fx)
+================================================================================
+
+http<Msg>(props: { url: string, options?: RequestInit, expect?: "json" | "text", onOk: (data: any) => Msg, onError: (error: string) => Msg }): Effect<Msg>
+  HTTP fetch effect. Default expect is "json". Non-2xx responses trigger onError with "HTTP {status}".
+
+delay<Msg>(ms: number, msg: Msg): Effect<Msg>
+  Dispatch msg after ms milliseconds.
+
+navigate<Msg>(url: string, replace?: boolean): Effect<Msg>
+  Push or replace browser history. Dispatches popstate event.
+
+storageSet<Msg>(key: string, value: string): Effect<Msg>
+  Write to localStorage. Silently catches quota errors.
+
+storageGet<Msg>(key: string, onResult: (value: string | null) => Msg): Effect<Msg>
+  Read from localStorage. Dispatches result message.
+
+log<Msg>(...args: any[]): Effect<Msg>
+  Console.log as an effect.
+
+dispatchMsg<Msg>(msg: Msg): Effect<Msg>
+  Dispatch a message as an effect. Useful in batched effect lists.
+
+compactEffects<Msg>(...effects: (Effect<Msg> | false | null | undefined)[]): Effect<Msg>[]
+  Filter out falsy effects. Use with spread in withFx.
+
+================================================================================
+SUBSCRIPTIONS (superapp/subs)
+================================================================================
+
+interval<Msg>(ms: number, msg: Msg | ((now: number) => Msg)): Sub<Msg>
+  Recurring timer. msg can be a static value or function receiving Date.now().
+
+onKeyDown<Msg>(msg: (key: string, e: KeyboardEvent) => Msg): Sub<Msg>
+  Global keydown listener.
+
+onKeyUp<Msg>(msg: (key: string, e: KeyboardEvent) => Msg): Sub<Msg>
+  Global keyup listener.
+
+onMouseMove<Msg>(msg: (x: number, y: number) => Msg): Sub<Msg>
+  Global mousemove. Receives clientX, clientY.
+
+onResize<Msg>(msg: (w: number, h: number) => Msg): Sub<Msg>
+  Window resize. Receives innerWidth, innerHeight.
+
+onUrlChange<Msg>(msg: (url: URL) => Msg): Sub<Msg>
+  Popstate listener. Not needed if using routerApp (it handles this).
+
+onAnimationFrame<Msg>(msg: (timestamp: number) => Msg): Sub<Msg>
+  requestAnimationFrame loop. Receives DOMHighResTimeStamp.
+
+onEvent<Msg>(event: string, msg: (e: Event) => Msg, target?: EventTarget): Sub<Msg>
+  Generic DOM event listener. Default target is window.
+
+websocket<Msg>(props: { url: string, protocols?: string | string[], onMessage: (data: any) => Msg, onOpen?: () => Msg, onClose?: () => Msg, onError?: (e: Event) => Msg }): Sub<Msg>
+  WebSocket subscription. Auto-connects when active, disconnects when removed.
+
+================================================================================
+ROUTER (superapp/router)
+================================================================================
+
+--- URL PARSERS ---
+
+Parser<T>: { _tag: "path", parse: (raw: string) => T | null }
+QueryParser<T>: { _tag: "query", parse: (raw: string | null) => T }
+
+str: Parser<string>           — Any string segment
+int: Parser<number>           — Integer segment
+float: Parser<number>         — Finite number segment
+oneOf<T>(values: readonly T[]): Parser<T>  — One of fixed string values
+
+q.str(fallback: string): QueryParser<string>
+q.int(fallback: number): QueryParser<number>
+q.float(fallback: number): QueryParser<number>
+q.bool(fallback: boolean): QueryParser<boolean>
+q.optional.str(): QueryParser<string | undefined>
+q.optional.int(): QueryParser<number | undefined>
+
+--- ROUTE DEFINITION ---
+
+RouteDef<Params>:
+  pattern: string
+  parse(pathname: string, search?: string): Params | null
+  toUrl(params: Params): string
+
+route(path: string): RouteDef<{}>
+route<Spec>(path: string, spec: Spec): RouteDef<ExtractParams<Spec>>
+
+Route pattern syntax:
+  "/users"          — Static segment
+  "/users/:id"      — Dynamic segment (use spec to type it)
+  "/docs/*"         — Wildcard (captures rest as "*" key)
+  ":param" names must match keys in the spec object
+
+Examples:
+  route("/")
+  route("/users/:id", { id: str })
+  route("/posts/:id", { id: int })
+  route("/search", { q: q.str(""), page: q.int(1) })
+  route("/users/:id/posts", { id: int, page: q.int(1) })
+
+--- PAGE PROTOCOL ---
+
+PageConfig<Model, Msg, Shared, Params>:
+  init(params: Params, shared: Shared): Model | [Model, Cmd<Msg>]
+  update(model: Model, msg: Msg, shared: Shared): Model | [Model, Cmd<Msg>]
+  view(model: Model, shared: Shared, dispatch: Dispatch<Msg>): VNode
+  subscriptions?(model: Model, shared: Shared): Sub<Msg>[]
+  save?(model: Model): unknown
+  load?(saved: unknown, params: Params, shared: Shared): Model | [Model, Cmd<Msg>]
+
+Type parameters:
+  Model  — Page-local state
+  Msg    — Page-local message type
+  Shared — App-wide shared state (read from router)
+  Params — URL parameters from route parser
+
+Lifecycle:
+  Navigate to page → init (or load if cache exists)
+  User interaction  → update
+  Render           → view
+  Events           → subscriptions
+  Navigate away    → save (caches model)
+  Return to page   → load (restores from cache)
+
+--- PAGE BINDING ---
+
+PageRoute<Shared>: binding of RouteDef + PageConfig + optional guard
+
+page<Model, Msg, Shared, Params>(
+  routeDef: RouteDef<Params>,
+  config: PageConfig<Model, Msg, Shared, Params>,
+  options?: { guard?: (params: Params, shared: Shared) => true | string }
+): PageRoute<Shared>
+
+Guard: return true to allow, or a URL string to redirect.
+Guards chain up to 5 levels deep to prevent infinite loops.
+
+--- ROUTER ---
+
+RouterModel<Shared>:
+  shared: Shared
+  url: URL
+  _page: { key: string, model: unknown, routeIdx: number, params: unknown } | null
+  _cache: Map<string, unknown>
+
+RouterMsg<Shared>:
+  | { tag: "@@router/UrlChanged", url: URL }
+  | { tag: "@@router/PageMsg", msg: unknown }
+  | { tag: "@@router/UpdateShared", fn: (s: Shared) => Shared }
+
+createRouter<Shared>(config: {
+  routes: PageRoute<Shared>[],
+  shared: Shared,
+  notFound?: PageConfig<any, any, Shared, { path: string }>
+}): Router<Shared>
+
+Router<Shared> interface:
+  init(url?: URL): RouterModel<Shared> | [RouterModel<Shared>, Cmd<RouterMsg<Shared>>]
+  update(model, msg): RouterModel<Shared> | [RouterModel<Shared>, Cmd<RouterMsg<Shared>>]
+  view(model, dispatch): VNode
+  subscriptions(model): Sub<RouterMsg<Shared>>[]
+  listen(): Sub<RouterMsg<Shared>>         — popstate subscription
+  navigate(url, replace?): Effect<RouterMsg<Shared>>
+  updateShared(fn: (s: Shared) => Shared): RouterMsg<Shared>
+  href(routeDef, params): string           — generate URL from route
+
+--- routerApp ---
+
+routerApp<Shared>(config: {
+  router: Router<Shared>,
+  layout: (content: VNode, shared: Shared, dispatch: Dispatch<RouterMsg<Shared>>) => VNode,
+  node: HTMLElement,
+  debug?: boolean | DebugConfig
+}): AppInstance<{ router: RouterModel<Shared> }, RouterMsg<Shared>>
+
+Zero-boilerplate convenience. Wires router init/update/view/subscriptions into app().
+
+--- routerLink ---
+
+routerLink(url: string): { href: string, onClick: (e: MouseEvent) => void }
+  SPA navigation helper. Spread onto <a> elements.
+  Respects Ctrl/Meta/Shift clicks (opens new tab).
+  Uses pushState + popstate event.
+
+================================================================================
+DEBUGGER (superapp/debugger)
+================================================================================
+
+DebuggerConfig:
+  position?: "bottom-right" | "bottom-left" | "top-right" | "top-left"
+  collapsed?: boolean
+  width?: string
+
+attachDebugger<S, Msg>(instance: AppInstance<S, Msg>, config?: DebuggerConfig): { destroy: () => void }
+  Attach a floating overlay with state inspection and time-travel controls.
+  Requires debug mode enabled on the app instance (debug: true or { history: true }).
+
+================================================================================
+JSX RUNTIME (superapp/jsx-runtime)
+================================================================================
+
+tsconfig.json:
+  "jsx": "react-jsx"
+  "jsxImportSource": "superapp"
+
+jsx(tag: string, props: Record<string, any> | null): VNode
+jsxs — alias for jsx
+jsxDEV — alias for jsx
+Fragment({ children?: any }): VNode — renders children with empty tag
+
+================================================================================
+COMMON PATTERNS
+================================================================================
+
+--- Basic TEA app ---
+import { app, h, type Dispatch } from "superapp";
+interface State { count: number }
+type Msg = { tag: "Inc" } | { tag: "Dec" };
+const init: State = { count: 0 };
+function update(state: State, msg: Msg): State {
+  switch (msg.tag) {
+    case "Inc": return { ...state, count: state.count + 1 };
+    case "Dec": return { ...state, count: state.count - 1 };
+  }
+}
+function view(state: State, dispatch: Dispatch<Msg>) {
+  return h("div", {},
+    h("button", { onClick: () => dispatch({ tag: "Dec" }) }, "-"),
+    h("span", {}, String(state.count)),
+    h("button", { onClick: () => dispatch({ tag: "Inc" }) }, "+"),
+  );
+}
+app({ init, update, view, node: document.getElementById("app")! });
+
+--- Effects in update ---
+function update(state: State, msg: Msg) {
+  switch (msg.tag) {
+    case "Save":
+      return withFx(state, storageSet("data", JSON.stringify(state)));
+    case "Load":
+      return withFx(state, storageGet("data", (raw) => ({ tag: "Loaded", raw })));
+    case "FetchData":
+      return withFx({ ...state, loading: true },
+        http({ url: "/api/data", onOk: (d) => ({ tag: "GotData", d }), onError: (e) => ({ tag: "Err", e }) }),
+      );
+  }
+}
+
+--- Conditional subscriptions ---
+function subscriptions(state: State): Sub<Msg>[] {
+  return [
+    state.auto && interval(1000, { tag: "Tick" }),
+    onKeyDown((key) => ({ tag: "Key", key })),
+  ];
+}
+
+--- Init with effects ---
+const init: [State, Cmd<Msg>] = [
+  { items: [], loading: true },
+  [http({ url: "/api/items", onOk: (d) => ({ tag: "Got", d }), onError: (e) => ({ tag: "Err", e }) })],
+];
+
+--- Nested TEA composition ---
+// Child module exports: State, Msg, init, update, view, subscriptions
+// Parent wraps with mapDispatch, mapEffect, mapSub
+type ParentMsg = { tag: "Child"; msg: Child.Msg };
+// View: Child.view(state.child, mapDispatch(dispatch, (m) => ({ tag: "Child", msg: m })))
+// Update: map child result with mapEffect
+// Subs: Child.subscriptions(state.child).map(s => mapSub(s, (m) => ({ tag: "Child", msg: m })))
+
+--- Router page with fetch ---
+export const page: PageConfig<Model, Msg, Shared, { id: number }> = {
+  init: (params) => [
+    { id: params.id, data: null, loading: true },
+    [http({ url: `/api/items/${params.id}`, onOk: (d) => ({ tag: "Got", d }), onError: (e) => ({ tag: "Err", e }) })],
+  ],
+  update: (model, msg) => { /* handle Got, Err */ },
+  view: (model, shared, dispatch) => { /* render */ },
+  save: (model) => model,
+  load: (saved) => saved as Model,
+};
+
+--- Page with guard ---
+page(route("/admin"), adminPage, {
+  guard: (params, shared) => shared.isLoggedIn ? true : "/login",
+})
+
+--- Keyed list rendering ---
+h("ul", {},
+  ...state.items.map(item =>
+    h("li", { key: item.id }, item.name)
+  ),
+)
+
+--- Class prop variants ---
+h("div", { class: "foo bar" })
+h("div", { class: ["foo", condition && "bar"] })
+h("div", { class: { foo: true, bar: isActive } })
+
+--- Custom effect ---
+function myEffectFx<Msg>(dispatch: Dispatch<Msg>, props: { onDone: (result: string) => Msg }): void {
+  someAsyncWork().then((result) => dispatch(props.onDone(result)));
+}
+export function myEffect<Msg>(onDone: (result: string) => Msg): Effect<Msg> {
+  return [myEffectFx, { onDone }];
+}
+
+--- Custom subscription ---
+function mySub<Msg>(dispatch: Dispatch<Msg>, props: { msg: (data: string) => Msg }): () => void {
+  const handler = (e: SomeEvent) => dispatch(props.msg(e.data));
+  someTarget.addEventListener("someevent", handler);
+  return () => someTarget.removeEventListener("someevent", handler);
+}
+export function onMyEvent<Msg>(msg: (data: string) => Msg): Sub<Msg> {
+  return [mySub, { msg }];
+}
+
+================================================================================
+CLI COMMANDS
+================================================================================
+
+superapp new <name> [--jsx]
+  Scaffold new project. Generates: index.html, package.json, tsconfig.json,
+  vite.config.ts, src/main.ts, src/shared.ts, src/app.css, src/pages/{Home,About,NotFound}.ts,
+  src/generated/router.ts. With --jsx generates .tsx files.
+
+superapp add <pattern> [--jsx]
+  Add a page file to src/pages/ and auto-run gen.
+  Pattern syntax:
+    "About"              → src/pages/About.ts, route: /about
+    "Home"               → src/pages/Home.ts, route: /
+    "NotFound"           → src/pages/NotFound.ts, 404 handler
+    "users/[id]"         → src/pages/users/[id].ts, route: /users/:id (string)
+    "users/[id:int]"     → src/pages/users/[id:int].ts, route: /users/:id (integer)
+    "users/[id]/Edit"    → src/pages/users/[id]/Edit.ts, route: /users/:id/edit
+    "Blog/Index"         → src/pages/Blog/Index.ts, route: /blog
+
+superapp gen
+  Scan src/pages/, generate src/generated/router.ts.
+  Sorts: static before dynamic, more segments first, alphabetical tiebreak.
+
+superapp dev
+  Run gen, then start Vite dev server (npx vite).
+
+superapp build
+  Run gen, then run Vite production build (npx vite build).
+
+================================================================================
+FILE CONVENTIONS FOR PAGES
+================================================================================
+
+Directory: src/pages/
+Each file must export: export const page: PageConfig<Model, Msg, Shared, Params>
+
+File naming → route mapping:
+  Home.ts           → /
+  About.ts          → /about
+  NotFound.ts       → 404 handler (not a route)
+  UserProfile.ts    → /user-profile (CamelCase → kebab-case)
+  Blog/Index.ts     → /blog (Index maps to parent)
+  users/[id].ts     → /users/:id (string param)
+  users/[id:int].ts → /users/:id (integer param)
+  [slug].ts         → /:slug
+
+Import name generation:
+  Home.ts           → Home
+  users/[id].ts     → UsersId
+  users/[id]/Edit   → UsersIdEdit
+
+Generated router imports from "../shared" expecting:
+  export interface Shared { ... }
+  export const initialShared: Shared = { ... }
+
+================================================================================
+COMMON MISTAKES AND FIXES
+================================================================================
+
+MISTAKE: Mutating state directly
+  state.count += 1;  // WRONG — state is frozen in debug mode
+FIX: Always return new objects
+  return { ...state, count: state.count + 1 };
+
+MISTAKE: Returning effects without state
+  return delay(500, { tag: "Tick" });
+FIX: Use withFx to pair state with effects
+  return withFx(state, delay(500, { tag: "Tick" }));
+
+MISTAKE: Forgetting to convert numbers to strings in h()
+  h("span", {}, state.count);  // count is number, renders as VNode child fine
+NOTE: Actually this works — h() auto-converts numbers to text nodes.
+
+MISTAKE: Using navigate() from superapp/fx and expecting router to pick it up without popstate
+NOTE: navigate() already dispatches a popstate event. This just works.
+
+MISTAKE: Not spreading routerLink
+  h("a", { routerLink("/about") })  // WRONG
+FIX: Spread the result
+  h("a", { ...routerLink("/about") })
+
+MISTAKE: Subscription position instability
+  Changing the ORDER of subscriptions in the array causes teardown/restart.
+FIX: Keep subscriptions in a stable order. Use falsy values for inactive ones
+  (e.g., false && interval(...)) so the array positions stay consistent.
+
+MISTAKE: Using onUrlChange with routerApp
+  routerApp already listens for URL changes via router.listen().
+FIX: Only use onUrlChange for manual (non-routerApp) setups.
+
+MISTAKE: Editing src/generated/router.ts manually
+  It will be overwritten by gen.
+FIX: Edit page files in src/pages/ and run superapp gen.
+
+MISTAKE: Page file doesn't export "page"
+  export default { init, update, view };  // WRONG
+FIX: Use named export
+  export const page: PageConfig<...> = { init, update, view };
+
+MISTAKE: Passing raw Msg objects as subscriptions
+  [{ tag: "Tick" }]  // WRONG — this is not a Sub
+FIX: Use subscription creators that return [SubFn, props] tuples
+  [interval(1000, { tag: "Tick" })]
+
+MISTAKE: Guard returning false instead of redirect URL
+  guard: (params, shared) => shared.isAdmin  // returns boolean
+FIX: Return true or a URL string
+  guard: (params, shared) => shared.isAdmin ? true : "/login"
+
+MISTAKE: Infinite guard redirect loop
+  Page A guards to B, B guards to A
+FIX: Guards chain up to 5 levels max, then falls through to notFound.
+  Design guard logic to avoid cycles.

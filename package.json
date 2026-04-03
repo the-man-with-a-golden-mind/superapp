@@ -1,0 +1,35 @@
+{
+  "name": "superapp",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/hyperapp.ts",
+    "./fx": "./src/fx.ts",
+    "./subs": "./src/subs.ts",
+    "./debugger": "./src/debugger.ts",
+    "./router": "./src/router.ts",
+    "./jsx-runtime": "./src/jsx-runtime.ts"
+  },
+  "bin": {
+    "superapp": "./cli/index.ts"
+  },
+  "main": "./dist/hyperapp.js",
+  "types": "./dist/hyperapp.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/hyperapp.ts src/fx.ts src/subs.ts src/debugger.ts src/router.ts src/jsx-runtime.ts --outdir dist --format esm --target browser && tsc --project tsconfig.build.json",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^20.8.9",
+    "@types/bun": "latest",
+    "happy-dom": "^20.8.9"
+  },
+  "peerDependencies": {
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "@types/node": "^25.5.0"
+  }
+}
