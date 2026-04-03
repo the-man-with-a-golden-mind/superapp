@@ -451,13 +451,13 @@ export function createRouter<Shared>(config: {
 
     const cacheKey = resolved.finalUrl.pathname;
 
-    // Same page check
+    // Same page check — return exact same reference to avoid re-render
     if (
       model._page &&
       model._page.key === cacheKey &&
       model._page.routeIdx === resolved.routeIdx
     ) {
-      return { ...model, url: resolved.finalUrl, _cache: cache };
+      return model;
     }
 
     const { model: pageModel, effects } = initPage(
@@ -536,6 +536,19 @@ export function createRouter<Shared>(config: {
 
     return effects.length > 0 ? [next, mapPageEffects(effects)] : next;
   }
+
+  // ── Stable listen subscription (memoized to avoid re-subscribe loop) ──
+
+  const LISTEN_PROPS = {};
+  const listenRunner = (dispatch: Dispatch<RouterMsg<Shared>>) => {
+    const handler = () => {
+      dispatch({ tag: "@@router/UrlChanged", url: new URL(location.href) });
+    };
+    handler();
+    addEventListener("popstate", handler);
+    return () => removeEventListener("popstate", handler);
+  };
+  const listenSub: Sub<RouterMsg<Shared>> = [listenRunner, LISTEN_PROPS];
 
   // ── Router object ───────────────────────────────────────────
 
@@ -626,21 +639,8 @@ export function createRouter<Shared>(config: {
       return mapPageSubs(cfg.subscriptions(model._page.model, model.shared));
     },
 
-    listen(): Sub<RouterMsg<Shared>> {
-      return [
-        (dispatch: Dispatch<RouterMsg<Shared>>) => {
-          const handler = () => {
-            dispatch({
-              tag: "@@router/UrlChanged",
-              url: new URL(location.href),
-            });
-          };
-          handler();
-          addEventListener("popstate", handler);
-          return () => removeEventListener("popstate", handler);
-        },
-        {},
-      ];
+    listen() {
+      return listenSub;
     },
 
     navigate(url: string, replace = false) {
