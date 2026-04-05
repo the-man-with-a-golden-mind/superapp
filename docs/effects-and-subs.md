@@ -14,7 +14,7 @@ Both are represented as data (`[function, props]` tuples), not imperative calls.
 An effect is a `[EffectFn, props]` tuple returned from the `update` function alongside the new state.
 
 ```ts
-type Effect<Msg> = readonly [EffectFn<Msg, any>, any];
+type Effect<Msg, Props = unknown> = readonly [EffectFn<Msg, Props>, Props];
 type EffectFn<Msg, P> = (dispatch: Dispatch<Msg>, props: P) => void;
 ```
 
@@ -152,6 +152,8 @@ return withFx(state, ...compactEffects(
 
 An effect is just a `[function, props]` pair. The function receives `dispatch` and the props, performs async work, and dispatches results back.
 
+Because `Effect` is generic over `Props`, custom effect creators can encode their payload contract without `as any` / `as never` casts.
+
 ```ts
 import type { Dispatch, Effect } from "superapp";
 
@@ -246,7 +248,7 @@ After every state update, the runtime diffs the old and new subscription arrays:
 3. **New subscription at a position** -- Start it
 4. **Removed subscription** -- Tear it down (call cleanup function)
 
-Props comparison ignores function-typed values (since callbacks are often re-created) and compares all other values by identity (`===`).
+Props comparison is shallow and uses identity (`===`) for every prop, including callbacks. If a closure changes, the runtime will re-subscribe so handlers cannot keep a stale dispatch reference.
 
 ### Built-in Subscriptions
 

@@ -2,7 +2,8 @@
 // Typed URL parsing, Page protocol, lifecycle management, guards
 
 import {
-  h, mapEffect, mapSub, mapDispatch,
+  app, h, mapEffect, mapSub, mapDispatch,
+  type AppInstance, type RenderHook, type UnmountHook,
   type Dispatch, type Sub, type Effect, type Cmd, type VNode,
 } from "./hyperapp";
 import { navigate as navFxEffect } from "./fx";
@@ -257,6 +258,57 @@ export interface PageConfig<
     params: Params,
     shared: Shared,
   ): Model | readonly [Model, Cmd<Msg>];
+  onMount?(ctx: PageMountContext<Model, Msg, Shared, Params>): void;
+  onUnmount?(ctx: PageMountContext<Model, Msg, Shared, Params>): void;
+  afterUpdate?(ctx: PageAfterUpdateContext<Model, Msg, Shared, Params>): void;
+  onError?(ctx: PageErrorContext<Model, Msg, Shared, Params>): void;
+  errorView?(ctx: PageErrorContext<Model, Msg, Shared, Params>): VNode;
+}
+
+export interface PageRenderContext<
+  Model,
+  Msg,
+  Shared,
+  Params extends Record<string, any>,
+> {
+  readonly model: Readonly<Model>;
+  readonly params: Params;
+  readonly shared: Readonly<Shared>;
+  readonly dispatch: Dispatch<Msg>;
+}
+
+export interface PageMountContext<
+  Model,
+  Msg,
+  Shared,
+  Params extends Record<string, any>,
+> extends PageRenderContext<Model, Msg, Shared, Params> {
+  readonly root: HTMLElement;
+}
+
+export interface PageAfterUpdateContext<
+  Model,
+  Msg,
+  Shared,
+  Params extends Record<string, any>,
+> extends PageMountContext<Model, Msg, Shared, Params> {
+  readonly prevModel: Readonly<Model>;
+  readonly prevParams: Params;
+  readonly prevShared: Readonly<Shared>;
+}
+
+export interface PageErrorContext<
+  Model,
+  Msg,
+  Shared,
+  Params extends Record<string, any>,
+> extends PageRenderContext<Model, Msg, Shared, Params> {
+  readonly phase: "view" | "onMount" | "onUnmount" | "afterUpdate";
+  readonly error: unknown;
+  readonly root?: HTMLElement;
+  readonly prevModel?: Readonly<Model>;
+  readonly prevParams?: Params;
+  readonly prevShared?: Readonly<Shared>;
 }
 
 // ── Page route binding ────────────────────────────────────────
@@ -331,6 +383,8 @@ export interface Router<Shared> {
     routeDef: RouteDef<P>,
     params: P,
   ): string;
+  __unsafeGetConfig?(routeIdx: number): PageConfig<any, any, Shared, any> | undefined;
+  __unsafeGetNotFoundConfig?(): PageConfig<any, any, Shared, { path: string }> | undefined;
 }
 
 export function createRouter<Shared>(config: {
@@ -438,7 +492,6 @@ export function createRouter<Shared>(config: {
     url: URL,
     resolved: Exclude<Resolved, { notFound: true }>,
   ): RouterModel<Shared> | readonly [RouterModel<Shared>, Cmd<RouterMsg<Shared>>] {
-    const cache = new Map(model._cache);
     const redirected =
       resolved.finalUrl.pathname !== url.pathname ||
       resolved.finalUrl.search !== url.search;
@@ -452,15 +505,6 @@ export function createRouter<Shared>(config: {
         ]
       : [];
 
-    // Save current page
-    if (model._page) {
-      const cfg = getConfig(model._page.routeIdx);
-      if (cfg?.save) {
-        const saved = cfg.save(model._page.model as any);
-        if (saved !== undefined) cache.set(model._page.key, saved);
-      }
-    }
-
     // Same page check — return exact same reference to avoid re-render
     if (
       model._page &&
@@ -468,6 +512,16 @@ export function createRouter<Shared>(config: {
       model._page.routeIdx === resolved.routeIdx
     ) {
       return redirectEffects.length > 0 ? [model, redirectEffects] : model;
+    }
+
+    const cache = new Map(model._cache);
+
+    if (model._page) {
+      const cfg = getConfig(model._page.routeIdx);
+      if (cfg?.save) {
+        const saved = cfg.save(model._page.model as any);
+        if (saved !== undefined) cache.set(model._page.key, saved);
+      }
     }
 
     const { model: pageModel, effects } = initPage(
@@ -631,8 +685,28 @@ export function createRouter<Shared>(config: {
         dispatch,
         (msg: any): RouterMsg<Shared> => ({ tag: "@@router/PageMsg", msg }),
       );
+      const renderCtx = {
+        model: model._page.model as any,
+        params: model._page.params as any,
+        shared: model.shared,
+        dispatch: pageDispatch,
+      };
 
-      return cfg.view(model._page.model as any, model.shared, pageDispatch);
+      try {
+        return cfg.view(model._page.model as any, model.shared, pageDispatch);
+      } catch (error) {
+        const errorCtx: PageErrorContext<any, any, Shared, any> = {
+          ...renderCtx,
+          phase: "view",
+          error,
+        };
+        try {
+          cfg.onError?.(errorCtx);
+        } catch {
+          // Swallow secondary boundary failures to preserve the fallback UI.
+        }
+        return cfg.errorView?.(errorCtx) ?? defaultPageErrorView(error);
+      }
     },
 
     subscriptions(model) {
@@ -657,6 +731,14 @@ export function createRouter<Shared>(config: {
     href(routeDef, params) {
       return routeDef.toUrl(params);
     },
+
+    __unsafeGetConfig(routeIdx) {
+      return getConfig(routeIdx);
+    },
+
+    __unsafeGetNotFoundConfig() {
+      return notFoundConfig;
+    },
   };
 }
 
@@ -679,7 +761,25 @@ export function routerLink(
 
 // ── routerApp() — zero-boilerplate app with router ────────────
 
-import { app, type AppInstance } from "./hyperapp";
+function defaultPageErrorView(error: unknown): VNode {
+  const message = error instanceof Error ? error.message : String(error);
+  return h(
+    "section",
+    {
+      role: "alert",
+      "data-superapp-error-boundary": "page",
+      style: {
+        padding: "1rem",
+        borderRadius: "0.75rem",
+        border: "1px solid #f5c2c7",
+        background: "#fff5f5",
+        color: "#842029",
+      },
+    },
+    h("strong", {}, "This page crashed."),
+    h("p", { style: { margin: "0.5rem 0 0" } }, message || "Unknown error"),
+  );
+}
 
 export function routerApp<Shared>(config: {
   router: Router<Shared>;
@@ -689,6 +789,8 @@ export function routerApp<Shared>(config: {
     dispatch: Dispatch<RouterMsg<Shared>>,
   ) => VNode;
   node: HTMLElement;
+  url?: URL;
+  listen?: boolean;
   debug?: boolean | { console?: boolean; history?: boolean; maxHistory?: number };
 }): AppInstance<{ router: RouterModel<Shared> }, RouterMsg<Shared>> {
   const { router } = config;
@@ -696,18 +798,117 @@ export function routerApp<Shared>(config: {
   type S = { router: RouterModel<Shared> };
   type M = RouterMsg<Shared>;
 
+  const getConfig = (routeIdx: number): PageConfig<any, any, Shared, any> | undefined =>
+    routeIdx >= 0
+      ? router.__unsafeGetConfig?.(routeIdx)
+      : router.__unsafeGetNotFoundConfig?.();
+
+  const resolvePage = (model: RouterModel<Shared>) => {
+    if (!model._page) return null;
+    const cfg = getConfig(model._page.routeIdx);
+    if (!cfg) return null;
+    return { cfg, page: model._page };
+  };
+
+  const pageDispatch = (dispatch: Dispatch<M>): Dispatch<any> =>
+    mapDispatch<any, M>(dispatch, (msg: any): M => ({ tag: "@@router/PageMsg", msg }));
+
+  const mountContext = (
+    entry: NonNullable<ReturnType<typeof resolvePage>>,
+    shared: Readonly<Shared>,
+    dispatch: Dispatch<M>,
+    root: HTMLElement,
+  ): PageMountContext<any, any, Shared, any> => ({
+    model: entry.page.model as any,
+    params: entry.page.params as any,
+    shared,
+    dispatch: pageDispatch(dispatch),
+    root,
+  });
+
+  const runLifecycleHook = (
+    entry: NonNullable<ReturnType<typeof resolvePage>>,
+    phase: "onMount" | "onUnmount",
+    shared: Readonly<Shared>,
+    dispatch: Dispatch<M>,
+    root: HTMLElement,
+  ) => {
+    const hook = phase === "onMount" ? entry.cfg.onMount : entry.cfg.onUnmount;
+    if (!hook) return;
+    const ctx = mountContext(entry, shared, dispatch, root);
+    try {
+      hook(ctx);
+    } catch (error) {
+      try {
+        entry.cfg.onError?.({ ...ctx, phase, error });
+      } catch {
+        // Swallow secondary boundary failures from lifecycle hooks.
+      }
+    }
+  };
+
+  const runAfterUpdate = (
+    entry: NonNullable<ReturnType<typeof resolvePage>>,
+    prev: NonNullable<ReturnType<typeof resolvePage>>,
+    shared: Readonly<Shared>,
+    prevShared: Readonly<Shared>,
+    dispatch: Dispatch<M>,
+    root: HTMLElement,
+  ) => {
+    if (!entry.cfg.afterUpdate) return;
+    const ctx: PageAfterUpdateContext<any, any, Shared, any> = {
+      ...mountContext(entry, shared, dispatch, root),
+      prevModel: prev.page.model as any,
+      prevParams: prev.page.params as any,
+      prevShared,
+    };
+    try {
+      entry.cfg.afterUpdate(ctx);
+    } catch (error) {
+      try {
+        entry.cfg.onError?.({ ...ctx, phase: "afterUpdate", error });
+      } catch {
+        // Swallow secondary boundary failures from lifecycle hooks.
+      }
+    }
+  };
+
   const wrap = (r: RouterModel<Shared> | readonly [RouterModel<Shared>, Cmd<M>]): S | readonly [S, Cmd<M>] =>
     Array.isArray(r) ? [{ router: r[0] as RouterModel<Shared> }, r[1] as Cmd<M>] : { router: r as RouterModel<Shared> };
 
   return app<S, M>({
-    init: wrap(router.init()) as S,
+    init: wrap(router.init(config.url)),
     update: (state, msg) => wrap(router.update(state.router, msg)),
     view: (state, dispatch) =>
       config.layout(router.view(state.router, dispatch), state.router.shared, dispatch),
-    subscriptions: (state) => [
-      ...router.subscriptions(state.router),
-      router.listen(),
-    ],
+    afterRender: ({ state, prevState, dispatch, node }: RenderHook<S, M>) => {
+      const current = resolvePage(state.router);
+      const prev = prevState ? resolvePage(prevState.router) : null;
+
+      if (!current) {
+        if (prev && prevState) runLifecycleHook(prev, "onUnmount", prevState.router.shared, dispatch, node);
+        return;
+      }
+
+      if (!prev || !prevState || prev.page.key !== current.page.key) {
+        if (prev && prevState) runLifecycleHook(prev, "onUnmount", prevState.router.shared, dispatch, node);
+        runLifecycleHook(current, "onMount", state.router.shared, dispatch, node);
+        return;
+      }
+
+      runAfterUpdate(current, prev, state.router.shared, prevState.router.shared, dispatch, node);
+    },
+    onUnmount: ({ state, node }: UnmountHook<S>) => {
+      const current = resolvePage(state.router);
+      if (!current) return;
+      runLifecycleHook(current, "onUnmount", state.router.shared, () => {}, node);
+    },
+    subscriptions: (state) => config.listen === false
+      ? router.subscriptions(state.router)
+      : [
+          ...router.subscriptions(state.router),
+          router.listen(),
+        ],
     node: config.node,
     debug: config.debug,
   });

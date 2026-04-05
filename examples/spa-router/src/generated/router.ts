@@ -4,6 +4,7 @@ import type { Shared } from "../shared";
 import { initialShared } from "../shared";
 
 import { page as About } from "../pages/About";
+import { page as CrashLab } from "../pages/CrashLab";
 import { page as usersIndex } from "../pages/users/Index";
 import { page as Home } from "../pages/Home";
 import { page as usersId } from "../pages/users/[id]";
@@ -12,6 +13,7 @@ import { page as NotFound } from "../pages/NotFound";
 export const router = createRouter<Shared>({
   routes: [
     page(route("/about"), About),
+    page(route("/crash-lab"), CrashLab),
     page(route("/users"), usersIndex),
     page(route("/"), Home),
     page(route("/users/:id", { id: str }), usersId),

@@ -1,13 +1,13 @@
 # Router
 
-SuperApp includes a built-in SPA router with typed URL parsing, a Page protocol for lifecycle management, guards, redirects, page caching, and code generation from file conventions.
+SuperApp includes a built-in SPA router with typed URL parsing, a Page protocol for lifecycle management, guards, redirects, page caching, error boundaries, and code generation from file conventions.
 
 ## Overview
 
 The router system has four layers:
 
 1. **Route definitions** -- Typed URL patterns with parsers
-2. **Page protocol** -- Lifecycle interface (`init`, `update`, `view`, `subscriptions`, `save`, `load`)
+2. **Page protocol** -- Lifecycle interface (`init`, `update`, `view`, `subscriptions`, `save`, `load`, `onMount`, `onUnmount`, `afterUpdate`)
 3. **Router instance** -- Matches URLs to pages, manages transitions
 4. **routerApp()** -- Zero-boilerplate app setup with layout
 
@@ -107,6 +107,11 @@ interface PageConfig<Model, Msg, Shared, Params> {
   subscriptions?(model: Model, shared: Shared): Sub<Msg>[];
   save?(model: Model): unknown;
   load?(saved: unknown, params: Params, shared: Shared): Model | [Model, Cmd<Msg>];
+  onMount?(ctx: PageMountContext<Model, Msg, Shared, Params>): void;
+  onUnmount?(ctx: PageMountContext<Model, Msg, Shared, Params>): void;
+  afterUpdate?(ctx: PageAfterUpdateContext<Model, Msg, Shared, Params>): void;
+  onError?(ctx: PageErrorContext<Model, Msg, Shared, Params>): void;
+  errorView?(ctx: PageErrorContext<Model, Msg, Shared, Params>): VNode;
 }
 ```
 
@@ -127,6 +132,11 @@ interface PageConfig<Model, Msg, Shared, Params> {
 4. **Active subscriptions**: `subscriptions(model, shared)` declares event sources
 5. **Navigation away**: `save(model)` caches page state (if defined)
 6. **Return to page**: `load(saved, params, shared)` restores from cache
+7. **DOM mounted**: `onMount(...)` runs after the page has been rendered into the DOM
+8. **DOM updated**: `afterUpdate(...)` runs after subsequent renders, including shared-state changes
+9. **DOM removed**: `onUnmount(...)` runs before the page is torn down
+
+If `view()` throws, the router calls `onError(...)` and renders `errorView(...)` (or a built-in fallback if `errorView` is omitted) instead of crashing the entire app.
 
 ### Page Caching with save/load
 
@@ -142,7 +152,7 @@ const userPage: PageConfig<UserModel, UserMsg, Shared, { id: string }> = {
 };
 ```
 
-The cache key is the pathname. If `save` is not defined, the page always re-initializes from `init`.
+The cache key is `pathname + search`. If `save` is not defined, the page always re-initializes from `init`.
 
 ### Example Page
 
@@ -248,6 +258,8 @@ interface Router<Shared> {
 }
 ```
 
+`init(url?)` and `routerApp({ url })` let you bootstrap the router from a deterministic URL instead of the current browser location.
+
 ### RouterMsg
 
 The router uses three internal message types:
@@ -287,6 +299,8 @@ routerApp({
       h("main", {}, content),
     ),
   node: document.getElementById("app")!,
+  url: new URL("https://example.test/users"),
+  listen: false,
   debug: true,
 });
 ```
@@ -295,6 +309,8 @@ The `layout` function receives:
 - `content` -- The VNode produced by the current page's `view`
 - `shared` -- The shared state
 - `dispatch` -- A `Dispatch<RouterMsg<Shared>>` for dispatching router-level messages
+
+`listen` defaults to `true`. Set `listen: false` when you want to control navigation messages yourself in tests, previews, or custom embedding environments.
 
 ---
 
@@ -331,6 +347,13 @@ The CLI can generate router code from your file structure.
 
 Place page files in `src/pages/`. Each file must export `page` as a `PageConfig`.
 
+Route discovery conventions used by `superapp gen`:
+
+- lowercase `index.ts` / `index.tsx` maps to the parent directory route
+- files or folders prefixed with `_` are ignored
+- `*.component.ts(x)`, `*.test.ts(x)`, `*.spec.ts(x)`, and `*.d.ts` are ignored
+- project-root `.superappignore` adds extra ignore patterns
+
 ```
 src/pages/
   Home.ts          -> /
@@ -339,6 +362,7 @@ src/pages/
   users/
     Index.ts       -> /users
     [id].ts        -> /users/:id
+    _users.ts      -> ignored helper
     [id:int]/
       Edit.ts      -> /users/:id/edit
   Blog/

@@ -8,7 +8,7 @@ const CLI_DIR = path.resolve(import.meta.dir, "..", "cli");
 // Test helper: create temp dir, run gen, read output
 const TMP = path.join(import.meta.dir, ".tmp-gen-test");
 
-function setup(pages: Record<string, string>) {
+function setup(pages: Record<string, string>, options?: { ignore?: string }) {
   fs.rmSync(TMP, { recursive: true, force: true });
   for (const [filePath, content] of Object.entries(pages)) {
     const full = path.join(TMP, "src", "pages", filePath);
@@ -22,6 +22,9 @@ function setup(pages: Record<string, string>) {
     path.join(sharedDir, "shared.ts"),
     'export interface Shared {}\nexport const initialShared = {};\n',
   );
+  if (options?.ignore) {
+    fs.writeFileSync(path.join(TMP, ".superappignore"), options.ignore);
+  }
 }
 
 function cleanup() {
@@ -203,5 +206,52 @@ describe("superapp gen", () => {
     expect(output).toContain('route("/users/:userId/posts/:postId"');
     expect(output).toContain("userId: str");
     expect(output).toContain("postId: int");
+  });
+
+  it("supports lowercase index.ts files as route entrypoints", async () => {
+    setup({
+      "blog/index.ts": STUB_PAGE,
+      "NotFound.ts": STUB_PAGE,
+    });
+
+    const output = await runGen();
+
+    expect(output).toContain('route("/blog")');
+    expect(output).toContain('import { page as blogIndex }');
+  });
+
+  it("ignores underscored helpers and component suffixes inside pages", async () => {
+    setup({
+      "Home.ts": STUB_PAGE,
+      "_draft.ts": STUB_PAGE,
+      "users/_helpers.ts": STUB_PAGE,
+      "users/Profile.component.tsx": STUB_PAGE,
+      "users/index.ts": STUB_PAGE,
+      "NotFound.ts": STUB_PAGE,
+    });
+
+    const output = await runGen();
+
+    expect(output).toContain('route("/")');
+    expect(output).toContain('route("/users")');
+    expect(output).not.toContain("_draft");
+    expect(output).not.toContain("_helpers");
+    expect(output).not.toContain("Profilecomponent");
+    expect(output).not.toContain('route("/users/profile.component")');
+  });
+
+  it("honors .superappignore patterns", async () => {
+    setup({
+      "Home.ts": STUB_PAGE,
+      "admin/Index.ts": STUB_PAGE,
+      "internal/Secret.ts": STUB_PAGE,
+      "NotFound.ts": STUB_PAGE,
+    }, { ignore: "internal/**\nadmin/**\n" });
+
+    const output = await runGen();
+
+    expect(output).toContain('route("/")');
+    expect(output).not.toContain('route("/admin")');
+    expect(output).not.toContain('route("/internal/secret")');
   });
 });

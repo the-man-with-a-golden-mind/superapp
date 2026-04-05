@@ -211,6 +211,35 @@ describe("app()", () => {
     expect(root.textContent).toBe(""); // still empty
   });
 
+  it("fires mount, afterRender, and unmount hooks", async () => {
+    const calls: string[] = [];
+    type Msg = { tag: "Inc" };
+
+    const instance = app<{ n: number }, Msg>({
+      init: { n: 0 },
+      update: (s) => ({ n: s.n + 1 }),
+      view: (s) => h("div", {}, String(s.n)),
+      onMount: ({ state, node }) => calls.push(`mount:${state.n}:${node.tagName}`),
+      afterRender: ({ state, prevState }) =>
+        calls.push(`after:${prevState?.n ?? "none"}->${state.n}`),
+      onUnmount: ({ state }) => calls.push(`unmount:${state.n}`),
+      node: root,
+    });
+
+    expect(calls).toEqual(["mount:0:DIV", "after:none->0"]);
+
+    instance.dispatch({ tag: "Inc" });
+    await flush();
+    instance.destroy();
+
+    expect(calls).toEqual([
+      "mount:0:DIV",
+      "after:none->0",
+      "after:0->1",
+      "unmount:1",
+    ]);
+  });
+
   it("nullification destroys app", async () => {
     type Msg = { tag: "Kill" };
     const instance = app<{ n: number } | null, Msg>({
@@ -352,6 +381,31 @@ describe("subscriptions", () => {
     expect(stopped).toBe(false);
     instance.dispatch({ tag: "Disable" });
     expect(stopped).toBe(true);
+  });
+
+  it("restarts subscriptions when callback props change", async () => {
+    const events: string[] = [];
+    type Msg = { tag: "Swap" };
+
+    const instance = app<{ version: number }, Msg>({
+      init: { version: 1 },
+      update: (s) => ({ version: s.version + 1 }),
+      view: () => h("div"),
+      subscriptions: (s) => [
+        [(_dispatch, props: { handler: () => number }) => {
+          events.push(`start:${props.handler()}`);
+          return () => events.push(`stop:${props.handler()}`);
+        }, { handler: () => s.version }],
+      ],
+      node: root,
+    });
+
+    expect(events).toEqual(["start:1"]);
+
+    instance.dispatch({ tag: "Swap" });
+    await flush();
+
+    expect(events).toEqual(["start:1", "stop:1", "start:2"]);
   });
 
   it("cleans up subscriptions on destroy", () => {

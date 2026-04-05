@@ -20,6 +20,7 @@ const instance = routerApp({
           h("a", { ...routerLink("/"), class: "btn btn-sm btn-ghost" }, "Home"),
           h("a", { ...routerLink("/about"), class: "btn btn-sm btn-ghost" }, "About"),
           h("a", { ...routerLink("/users"), class: "btn btn-sm btn-ghost" }, "Users"),
+          h("a", { ...routerLink("/crash-lab"), class: "btn btn-sm btn-ghost" }, "Crash Lab"),
         ),
       ),
       // Page content (rendered by the router)

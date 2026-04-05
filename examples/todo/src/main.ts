@@ -19,6 +19,7 @@ interface State {
   filter: Filter;
   input: string;
   nextId: number;
+  lastAddedId: number | null;
 }
 
 type Msg =
@@ -55,8 +56,8 @@ function filteredTodos(todos: Todo[], filter: Filter): Todo[] {
 // Init
 // ---------------------------------------------------------------------------
 
-const init: [State, ReturnType<typeof storageGet>[]] = [
-  { todos: [], filter: "all", input: "", nextId: 1 },
+const init: readonly [State, ReturnType<typeof storageGet<Msg>>[]] = [
+  { todos: [], filter: "all", input: "", nextId: 1, lastAddedId: null },
   [storageGet<Msg>(STORAGE_KEY, (raw) => ({ tag: "LoadTodos", raw }))],
 ];
 
@@ -64,14 +65,20 @@ const init: [State, ReturnType<typeof storageGet>[]] = [
 // Update
 // ---------------------------------------------------------------------------
 
-function update(state: State, msg: Msg): State | [State, any[]] {
+function update(state: State, msg: Msg): State | readonly [State, any[]] {
   switch (msg.tag) {
     case "AddTodo": {
       const text = state.input.trim();
       if (!text) return state;
       const todo: Todo = { id: state.nextId, text, done: false };
       const todos = [...state.todos, todo];
-      const next = { ...state, todos, input: "", nextId: state.nextId + 1 };
+      const next = {
+        ...state,
+        todos,
+        input: "",
+        nextId: state.nextId + 1,
+        lastAddedId: todo.id,
+      };
       return withFx(next, saveTodos(todos));
     }
 
@@ -79,12 +86,16 @@ function update(state: State, msg: Msg): State | [State, any[]] {
       const todos = state.todos.map((t) =>
         t.id === msg.id ? { ...t, done: !t.done } : t,
       );
-      return withFx({ ...state, todos }, saveTodos(todos));
+      return withFx({ ...state, todos, lastAddedId: null }, saveTodos(todos));
     }
 
     case "RemoveTodo": {
       const todos = state.todos.filter((t) => t.id !== msg.id);
-      return withFx({ ...state, todos }, saveTodos(todos));
+      return withFx({
+        ...state,
+        todos,
+        lastAddedId: state.lastAddedId === msg.id ? null : state.lastAddedId,
+      }, saveTodos(todos));
     }
 
     case "SetFilter":
@@ -95,7 +106,7 @@ function update(state: State, msg: Msg): State | [State, any[]] {
 
     case "ClearCompleted": {
       const todos = state.todos.filter((t) => !t.done);
-      return withFx({ ...state, todos }, saveTodos(todos));
+      return withFx({ ...state, todos, lastAddedId: null }, saveTodos(todos));
     }
 
     case "LoadTodos": {
@@ -103,7 +114,7 @@ function update(state: State, msg: Msg): State | [State, any[]] {
       try {
         const loaded: Todo[] = JSON.parse(msg.raw);
         const maxId = loaded.reduce((max, t) => Math.max(max, t.id), 0);
-        return { ...state, todos: loaded, nextId: maxId + 1 };
+        return { ...state, todos: loaded, nextId: maxId + 1, lastAddedId: null };
       } catch {
         return state;
       }
@@ -128,6 +139,9 @@ function view(state: State, dispatch: Dispatch<Msg>) {
         h("h1", { class: "card-title text-2xl font-bold" }, "Todo"),
         h("span", { class: "badge badge-primary" }, `${remaining} left`),
       ),
+      h("p", { class: "text-sm text-base-content/60 mb-4" },
+        "onMount focuses the input, afterRender scrolls newly-added todos into view.",
+      ),
 
       // Input row (form for Enter support)
       h("form", {
@@ -138,6 +152,7 @@ function view(state: State, dispatch: Dispatch<Msg>) {
         },
       },
         h("input", {
+          id: "todo-input",
           class: "input input-bordered flex-1",
           type: "text",
           placeholder: "What needs to be done?",
@@ -162,6 +177,7 @@ function view(state: State, dispatch: Dispatch<Msg>) {
       ...visible.map((todo) =>
         h("div", {
           key: todo.id,
+          id: `todo-${todo.id}`,
           class: "flex items-center gap-3 py-2 px-1 group",
         },
           h("input", {
@@ -209,6 +225,22 @@ const instance = app<State, Msg>({
   init,
   update,
   view,
+  onMount: ({ node }) => {
+    node.querySelector<HTMLInputElement>("#todo-input")?.focus();
+    document.title = "SuperApp Todo";
+  },
+  afterRender: ({ state, prevState, node }) => {
+    document.title = `Todo (${state.todos.length})`;
+    if (state.lastAddedId !== null && state.lastAddedId !== prevState?.lastAddedId) {
+      node.querySelector<HTMLElement>(`#todo-${state.lastAddedId}`)?.scrollIntoView({
+        block: "nearest",
+      });
+      node.querySelector<HTMLInputElement>("#todo-input")?.focus();
+    }
+  },
+  onUnmount: () => {
+    document.title = "SuperApp";
+  },
   node: document.getElementById("app")!,
   debug: true,
 });

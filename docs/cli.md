@@ -94,6 +94,7 @@ The pattern describes both the file path and the route.
 | `users/[id:float]` | `src/pages/users/[id:float].ts` | `/users/:id` (float) |
 | `users/[id]/Edit` | `src/pages/users/[id]/Edit.ts` | `/users/:id/edit` |
 | `Blog/Index` | `src/pages/Blog/Index.ts` | `/blog` |
+| `blog/index` | `src/pages/blog/index.ts` | `/blog` |
 | `UserProfile` | `src/pages/UserProfile.ts` | `/user-profile` |
 
 ### Dynamic segments
@@ -108,6 +109,7 @@ The pattern describes both the file path and the route.
 - `Home` is special: always maps to `/`
 - `NotFound` is special: used as the 404 handler
 - `Index` maps to the parent directory route
+- lowercase `index` also maps to the parent directory route
 
 ### Generated file
 
@@ -168,6 +170,13 @@ superapp gen
 3. Sorts routes (static before dynamic, more-specific first)
 4. Generates a router module that imports all pages and creates a `createRouter` call
 5. Writes to `src/generated/router.ts`
+
+Ignored automatically during the scan:
+
+- files and folders prefixed with `_`
+- `*.component.ts(x)`
+- `*.test.ts(x)`, `*.spec.ts(x)`, and `*.d.ts`
+- extra patterns from project-root `.superappignore`
 
 ### When to run
 
@@ -269,6 +278,10 @@ my-app/
 ### Conventions
 
 - Every page file must export `page` as a `PageConfig`
+- Route files can use `index.ts` / `index.tsx` to map to the parent directory
+- Files and folders prefixed with `_` are ignored
+- `*.component.ts(x)`, `*.test.ts(x)`, `*.spec.ts(x)`, and `*.d.ts` are ignored
+- Add project-specific ignore patterns in project-root `.superappignore`
 - `src/shared.ts` must export `Shared` type and `initialShared` value
 - `src/generated/` is auto-generated; do not edit files in this directory
 - Add `src/generated/` to `.gitignore` or commit it (either approach works)

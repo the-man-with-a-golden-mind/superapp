@@ -19,6 +19,7 @@ SuperApp is a functional, type-safe web framework built on The Elm Architecture.
 
 - **The Elm Architecture (TEA)** -- State, Update, View with immutable state and discriminated union messages
 - **Typed URL routing** -- Page protocol with typed parsers, guards, redirects, and page caching (like elm-spa)
+- **Page lifecycle & error boundaries** -- `onMount`, `onUnmount`, `afterUpdate`, and per-page fallback UI
 - **Effects & Subscriptions** -- HTTP, timers, localStorage, WebSocket, keyboard, resize, animation frames
 - **Keyed VDOM reconciliation** -- Head/tail optimized diffing with keyed children
 - **JSX and h() support** -- Use JSX with automatic transform or plain `h()` calls
@@ -78,6 +79,12 @@ app({ init, update, view, node: document.getElementById("app")! });
 
 Side effects are returned from `update` as `[State, Cmd<Msg>]` tuples. They run after the state update.
 
+Effects are generic over their props, so custom effect creators can now enforce the payload shape at compile time:
+
+```ts
+type Effect<Msg, Props = unknown> = readonly [EffectFn<Msg, Props>, Props];
+```
+
 ```ts
 import { withFx } from "superapp";
 import { delay, http } from "superapp/fx";
@@ -120,6 +127,30 @@ function subscriptions(state: State): Sub<Msg>[] {
 app({ init, update, view, subscriptions, node: document.getElementById("app")! });
 ```
 
+### 3.5 App Lifecycle Hooks
+
+`app()` can also run code after the DOM commit:
+
+```ts
+app({
+  init,
+  update,
+  view,
+  onMount: ({ node }) => {
+    node.querySelector("#search")?.focus();
+  },
+  afterRender: ({ state, prevState }) => {
+    if (state.count !== prevState?.count) {
+      document.title = `Count: ${state.count}`;
+    }
+  },
+  onUnmount: () => {
+    document.title = "SuperApp";
+  },
+  node: document.getElementById("app")!,
+});
+```
+
 ### 4. Router & Pages
 
 File-based routing with typed URL parsers and a Page protocol.
@@ -154,6 +185,34 @@ routerApp({
   node: document.getElementById("app")!,
 });
 ```
+
+Pages can opt into DOM-aware lifecycle hooks and an error boundary:
+
+```ts
+const pageWithChart: PageConfig<Model, Msg, Shared, {}> = {
+  // ...
+  onMount: ({ root }) => mountChart(root.querySelector("#chart")!),
+  afterUpdate: ({ model, prevModel }) => {
+    if (model.series !== prevModel.series) redrawChart(model.series);
+  },
+  onUnmount: () => destroyChart(),
+  onError: ({ error, phase }) => console.error("page failed", phase, error),
+  errorView: ({ error }) => h("div", { role: "alert" }, String(error)),
+};
+```
+
+If you need deterministic bootstrapping outside the browser's current URL, `routerApp()` also accepts `url` and `listen: false`.
+
+### Page File Conventions
+
+`superapp gen` treats only route files in `src/pages/` as pages. The generator skips:
+
+- files and directories prefixed with `_`
+- `*.component.ts(x)`
+- `*.test.ts(x)`, `*.spec.ts(x)`, and `*.d.ts`
+- patterns listed in project-root `.superappignore`
+
+Use `src/components/` or `src/lib/` for shared non-route code. Lowercase `index.ts(x)` is supported as a route entrypoint.
 
 Use `routerLink` for SPA navigation without full page reloads:
 
@@ -221,7 +280,7 @@ return [
 | `text(value)` | Create a text VNode |
 | `memo(component, props)` | Memoized component (skips re-render if props unchanged) |
 | `lazy(view, data)` | Lazy VNode (alias for memo pattern) |
-| `app(config)` | Mount an application, returns `AppInstance` |
+| `app(config)` | Mount an application, returns `AppInstance`; config supports `onMount`, `afterRender`, `onUnmount` |
 | `noFx(state)` | Wrap state with no effects: `[state, []]` |
 | `withFx(state, ...effects)` | Wrap state with effects: `[state, effects]` |
 | `batch(commands)` | Merge multiple `Cmd` arrays into one |
@@ -231,6 +290,16 @@ return [
 | `mapDispatch(dispatch, fn)` | Transform a dispatch function's message type |
 | `batchSubs(...subs)` | Merge subscriptions from multiple sources |
 | `resolveClass(value)` | Resolve class values (string, array, or object) |
+
+### `superapp/testing`
+
+| Export | Description |
+|--------|-------------|
+| `getModel(result)` | Unwrap `State` from `State | [State, Cmd]` |
+| `getEffects(result)` | Unwrap `Cmd` from an update result |
+| `hasEffects(result)` | Type guard for tuple-style update results |
+| `createDispatchSpy()` | Record dispatched messages in tests |
+| `runEffect(effect, dispatch)` | Execute an effect tuple with its props |
 
 ### `superapp/fx` (effects)
 
@@ -276,7 +345,7 @@ return [
 | `q.optional.int()` | Query parser: optional integer |
 | `page(routeDef, config, options?)` | Bind a route to a PageConfig |
 | `createRouter({ routes, shared, notFound? })` | Create a Router instance |
-| `routerApp({ router, layout, node, debug? })` | Boot an app with routing |
+| `routerApp({ router, layout, node, url?, listen?, debug? })` | Boot an app with routing, optional deterministic URL bootstrap |
 | `routerLink(url)` | Returns `{ href, onClick }` for SPA links |
 
 ### `superapp/debugger`
@@ -322,16 +391,23 @@ superapp add "Blog/Index"             # /blog (Index maps to parent)
 
 CamelCase filenames are converted to kebab-case routes (e.g., `UserProfile.ts` -> `/user-profile`).
 
+Ignored by `superapp gen`:
+
+- files and directories prefixed with `_`
+- `*.component.ts(x)`
+- `*.test.ts(x)`, `*.spec.ts(x)`, and `*.d.ts`
+- patterns from project-root `.superappignore`
+
 ---
 
 ## Examples
 
 | Example | Description |
 |---------|-------------|
-| `examples/counter` | Counter with effects (delay) and subscriptions (interval) |
-| `examples/todo` | Todo app with localStorage persistence |
+| `examples/counter` | Counter with effects, subscriptions, and app lifecycle hooks |
+| `examples/todo` | Todo app with localStorage persistence plus post-render focus/scroll hooks |
 | `examples/nested-tea` | Two independent Counter modules composed via mapDispatch/mapEffect/mapSub |
-| `examples/spa-router` | Full SPA with typed routes, multiple pages, layout, and debugger |
+| `examples/spa-router` | Full SPA with typed routes, page lifecycle hooks, cached page state, error boundaries, and ignored helper files inside `pages/` |
 
 Run an example:
 

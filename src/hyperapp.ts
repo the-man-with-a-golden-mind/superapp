@@ -26,15 +26,30 @@ export type MemoView<P extends Record<string, any> = any> = (props: P) => VNode;
 export type Dispatch<Msg> = (msg: Msg | readonly Msg[]) => void;
 
 export type EffectFn<Msg, P = any> = (dispatch: Dispatch<Msg>, props: P) => void;
-export type Effect<Msg> = readonly [EffectFn<Msg, any>, any];
+export type Effect<Msg, P = any> = readonly [EffectFn<Msg, P>, P];
 
-export type Cmd<Msg> = readonly Effect<Msg>[];
+export type Cmd<Msg> = readonly Effect<Msg, any>[];
 export type SubFn<Msg, P = any> = (dispatch: Dispatch<Msg>, props: P) => () => void;
-export type Sub<Msg> = readonly [SubFn<Msg, any>, any] | false | null | undefined;
+export type Sub<Msg, P = any> = readonly [SubFn<Msg, P>, P] | false | null | undefined;
 
 export type UpdateResult<S, Msg> = S | readonly [S, Cmd<Msg>];
 export type Update<S, Msg> = (state: Readonly<S>, msg: Msg) => UpdateResult<S, Msg>;
 export type Init<S, Msg> = S | readonly [S, Cmd<Msg>];
+
+export interface MountHook<S, Msg> {
+  state: Readonly<S>;
+  dispatch: Dispatch<Msg>;
+  node: HTMLElement;
+}
+
+export interface RenderHook<S, Msg> extends MountHook<S, Msg> {
+  prevState: Readonly<S> | undefined;
+}
+
+export interface UnmountHook<S> {
+  state: Readonly<S>;
+  node: HTMLElement;
+}
 
 export interface AppConfig<S, Msg> {
   init: Init<S, Msg>;
@@ -42,6 +57,9 @@ export interface AppConfig<S, Msg> {
   view: (state: Readonly<S>, dispatch: Dispatch<Msg>) => VNode;
   subscriptions?: (state: Readonly<S>) => Sub<Msg>[];
   node: HTMLElement;
+  onMount?: (hook: MountHook<S, Msg>) => void;
+  afterRender?: (hook: RenderHook<S, Msg>) => void;
+  onUnmount?: (hook: UnmountHook<S>) => void;
   debug?: boolean | DebugConfig;
   middleware?: (dispatch: Dispatch<Msg>) => Dispatch<Msg>;
 }
@@ -208,7 +226,7 @@ function pushChildren(raw: any[], out: VNode[]): void {
 export const none: Cmd<any> = [];
 
 export function batch<Msg>(commands: readonly Cmd<Msg>[]): Cmd<Msg> {
-  const batchedEffects: Effect<Msg>[] = [];
+  const batchedEffects: Effect<Msg, any>[] = [];
   for (let i = 0; i < commands.length; i++) {
     const cmd = commands[i];
     if (cmd) {
@@ -224,10 +242,10 @@ export function noFx<S>(state: S): readonly [S, Cmd<any>] {
   return [state, none];
 }
 
-export function withFx<S, Msg>(
+export function withFx<S, const Fx extends readonly Effect<any, any>[]>(
   state: S,
-  ...effects: Effect<Msg>[]
-): readonly [S, Cmd<Msg>] {
+  ...effects: Fx
+): readonly [S, Fx] {
   return [state, effects];
 }
 
@@ -245,14 +263,17 @@ function mapMsg<A, B>(dispatch: Dispatch<B>, fn: (a: A) => B): Dispatch<A> {
   };
 }
 
-export function mapEffect<A, B>(effect: Effect<A>, fn: (a: A) => B): Effect<B> {
+export function mapEffect<A, B, P>(
+  effect: Effect<A, P>,
+  fn: (a: A) => B,
+): Effect<B, P> {
   const [runner, props] = effect;
   return [(dispatch, p) => runner(mapMsg(dispatch, fn), p), props];
 }
 
-export function mapSub<A, B>(sub: Sub<A>, fn: (a: A) => B): Sub<B> {
+export function mapSub<A, B, P>(sub: Sub<A, P>, fn: (a: A) => B): Sub<B, P> {
   if (!sub) return sub as Sub<B>;
-  const [runner, props] = sub as [SubFn<A, any>, any];
+  const [runner, props] = sub as [SubFn<A, P>, P];
   return [(dispatch, p) => runner(mapMsg(dispatch, fn), p), props];
 }
 
@@ -643,14 +664,13 @@ function subPropsChanged(
 ): boolean {
   for (const k in a) {
     if (Object.prototype.hasOwnProperty.call(a, k)) {
-      if (typeof a[k] !== "function" && typeof b?.[k] !== "function" && a[k] !== b?.[k]) return true;
+      if (a[k] !== b?.[k]) return true;
     }
   }
   for (const k in b) {
     if (
       Object.prototype.hasOwnProperty.call(b, k) &&
-      !Object.prototype.hasOwnProperty.call(a, k) &&
-      typeof b[k] !== "function"
+      !Object.prototype.hasOwnProperty.call(a, k)
     ) return true;
   }
   return false;
@@ -694,6 +714,9 @@ export function app<S, Msg>(config: AppConfig<S, Msg>): AppInstance<S, Msg> {
     view,
     subscriptions,
     node: rootNode,
+    onMount,
+    afterRender,
+    onUnmount,
     debug: rawDebug,
     middleware,
   } = config;
@@ -724,6 +747,8 @@ export function app<S, Msg>(config: AppConfig<S, Msg>): AppInstance<S, Msg> {
   let subs: (ActiveSub<Msg> | undefined)[] = [];
   let rafId = 0;
   let destroyed = false;
+  let mounted = false;
+  let lastRenderedState: Readonly<S> | undefined;
 
   const stateHistory: Readonly<S>[] = dbg.history ? [state] : [];
   let historyIdx = dbg.history ? 0 : -1;
@@ -738,6 +763,7 @@ export function app<S, Msg>(config: AppConfig<S, Msg>): AppInstance<S, Msg> {
     rafId = 0;
     if (destroyed) return;
 
+    const prevState = lastRenderedState;
     const next = view(state, dispatch);
 
     if (!vdom) {
@@ -748,6 +774,13 @@ export function app<S, Msg>(config: AppConfig<S, Msg>): AppInstance<S, Msg> {
       appNode = patch(rootNode, appNode!, vdom, next, false);
     }
     vdom = next;
+
+    if (!mounted) {
+      mounted = true;
+      onMount?.({ state, dispatch, node: rootNode });
+    }
+    afterRender?.({ state, prevState, dispatch, node: rootNode });
+    lastRenderedState = state;
   };
 
   const msgQueue: Msg[] = [];
@@ -840,10 +873,13 @@ export function app<S, Msg>(config: AppConfig<S, Msg>): AppInstance<S, Msg> {
   };
 
   const destroy = (): void => {
+    if (destroyed) return;
     destroyed = true;
     if (rafId) cancelAnimationFrame(rafId);
     for (const s of subs) if (s) s[2]();
     subs = [];
+    if (mounted) onUnmount?.({ state, node: rootNode });
+    mounted = false;
     rootNode.textContent = "";
   };
 

@@ -48,7 +48,7 @@ function view(state: Readonly<State>, dispatch: Dispatch<Msg>) {
   return h("div", { class: "card bg-base-100 shadow-xl max-w-md mx-auto mt-16" },
     h("div", { class: "card-body items-center text-center" },
       h("h1", { class: "card-title text-2xl font-bold" }, "Counter"),
-      h("p", { class: "text-base-content/60 text-sm mb-4" }, "Effects & subscriptions demo"),
+      h("p", { class: "text-base-content/60 text-sm mb-4" }, "Effects, subscriptions, and app lifecycle hooks"),
 
       h("div", { class: "text-7xl font-extralight tabular-nums my-4" }, String(state.count)),
 
@@ -58,6 +58,7 @@ function view(state: Readonly<State>, dispatch: Dispatch<Msg>) {
           onClick: () => dispatch({ tag: "Dec" }),
         }, "\u2212 1"),
         h("button", {
+          id: "counter-inc",
           class: "btn btn-outline btn-sm",
           onClick: () => dispatch({ tag: "Inc" }),
         }, "+ 1"),
@@ -94,6 +95,18 @@ const instance = app<State, Msg>({
   update,
   view,
   subscriptions,
+  onMount: ({ node }) => {
+    node.dataset.lifecycle = "mounted";
+    node.querySelector<HTMLButtonElement>("#counter-inc")?.focus();
+    document.title = "SuperApp Counter";
+  },
+  afterRender: ({ state, node }) => {
+    node.dataset.renders = String((Number(node.dataset.renders ?? "0")) + 1);
+    document.title = `Counter: ${state.count}`;
+  },
+  onUnmount: () => {
+    document.title = "SuperApp";
+  },
   node: document.getElementById("app")!,
   debug: true,
 });

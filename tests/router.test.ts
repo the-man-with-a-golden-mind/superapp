@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
   str, int, float, oneOf, q, route, routerLink,
-  page, createRouter,
+  page, createRouter, routerApp,
   type PageConfig, type RouterModel, type RouterMsg, type Router,
   matchRoute, onRoute, type Route,
 } from "../src/router";
@@ -17,6 +17,10 @@ function model<S>(r: S | readonly [S, any]): S {
 
 function effects<M>(r: any): Effect<M>[] {
   return Array.isArray(r) ? r[1] : [];
+}
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -905,6 +909,99 @@ describe("page lifecycle", () => {
     m = model(r.update(m, { tag: "@@router/UrlChanged", url: U("/users/42") }));
     expect(loadArgs.params).toEqual({ id: "42" });
     expect(loadArgs.shared).toEqual({ user: "Alice" });
+  });
+});
+
+describe("routerApp page hooks and error boundaries", () => {
+  it("renders fallback UI and reports page view errors", () => {
+    const calls: string[] = [];
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+
+    try {
+      const crashPage: PageConfig<{ ok: boolean }, never, {}, {}> = {
+        init: () => ({ ok: true }),
+        update: (m) => m,
+        view: () => {
+          throw new Error("boom");
+        },
+        onError: (ctx) => calls.push(`${ctx.phase}:${(ctx.error as Error).message}`),
+        errorView: (ctx) => h("div", { id: "fallback" }, `fallback:${(ctx.error as Error).message}`),
+      };
+
+      const instance = routerApp({
+        router: createRouter({
+          routes: [page(route("/"), crashPage)],
+          shared: {},
+        }),
+        layout: (content) => content,
+        node: root,
+        url: U("/"),
+        listen: false,
+      });
+
+      expect(root.querySelector("#fallback")?.textContent).toBe("fallback:boom");
+      expect(calls).toEqual(["view:boom"]);
+      instance.destroy();
+    } finally {
+      root.remove();
+    }
+  });
+
+  it("runs onMount, afterUpdate, and onUnmount with DOM available", async () => {
+    const events: string[] = [];
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+
+    try {
+      const home: PageConfig<{ n: number }, "Inc", { flag: string }, {}> = {
+        init: () => ({ n: 0 }),
+        update: (m, msg) => ({ n: msg === "Inc" ? m.n + 1 : m.n }),
+        view: (m, shared) => h("div", { id: "home" }, `${shared.flag}:${m.n}`),
+        onMount: ({ model, root }) => events.push(`mount:${model.n}:${root.textContent}`),
+        afterUpdate: ({ model, prevModel, shared, prevShared, root }) => {
+          events.push(`after:${prevModel.n}->${model.n}:${prevShared.flag}->${shared.flag}:${root.textContent}`);
+        },
+        onUnmount: ({ model }) => events.push(`unmount:${model.n}`),
+      };
+      const other: PageConfig<string, never, { flag: string }, {}> = {
+        init: () => "other",
+        update: (m) => m,
+        view: (m) => h("div", { id: "other" }, m),
+      };
+
+      const router = createRouter({
+        routes: [page(route("/"), home), page(route("/other"), other)],
+        shared: { flag: "A" },
+      });
+
+      const instance = routerApp({
+        router,
+        layout: (content) => content,
+        node: root,
+        url: U("/"),
+        listen: false,
+      });
+
+      expect(events).toEqual(["mount:0:A:0"]);
+
+      instance.dispatch({ tag: "@@router/PageMsg", msg: "Inc" });
+      await flush();
+      instance.dispatch(router.updateShared((shared) => ({ ...shared, flag: "B" })));
+      await flush();
+      instance.dispatch({ tag: "@@router/UrlChanged", url: U("/other") });
+      await flush();
+      instance.destroy();
+
+      expect(events).toEqual([
+        "mount:0:A:0",
+        "after:0->1:A->A:A:1",
+        "after:1->1:A->B:B:1",
+        "unmount:1",
+      ]);
+    } finally {
+      root.remove();
+    }
   });
 });
 

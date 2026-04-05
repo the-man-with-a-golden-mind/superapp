@@ -36,7 +36,7 @@ function update(state: Readonly<State>, msg: Msg) {
     case "Decrement":
       return { ...state, count: state.count - 1 };
     case "DelayedIncrement":
-      return [state, delay<Msg>(1000, { tag: "Increment" })] as const;
+      return [state, [delay<Msg>(1000, { tag: "Increment" })]] as const;
     case "SetMessage":
       return { ...state, message: msg.value };
     case "Tick":
